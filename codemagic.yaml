@@ -21,11 +21,6 @@ workflows:
       - name: Verify CityKing iOS icon
         script: test -f ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png
 
-      - name: Install CocoaPods
-        script: |
-          cd ios
-          pod install
-
       - name: Set up keychain
         script: keychain initialize
 
