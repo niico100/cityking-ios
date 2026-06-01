@@ -21,7 +21,7 @@ workflows:
       - name: Verify CityKing iOS icon
         script: |
           test -f ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png
-          test "$(shasum -a 256 ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png | awk '{print $1}')" = "f5c9386b24ece4c993b823ce31b559a6a65aae70962c36c950cf12b62265222d"
+          test "$(shasum -a 256 ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png | awk '{print $1}')" = "b659ec2ae72adb97b6a0b56b67559fe4e0be468b593add1bd7f9bbb2d090308a"
 
       - name: Set up keychain
         script: keychain initialize
@@ -75,7 +75,7 @@ workflows:
       - name: Verify CityKing iOS icon
         script: |
           test -f ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png
-          test "$(shasum -a 256 ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png | awk '{print $1}')" = "f5c9386b24ece4c993b823ce31b559a6a65aae70962c36c950cf12b62265222d"
+          test "$(shasum -a 256 ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png | awk '{print $1}')" = "b659ec2ae72adb97b6a0b56b67559fe4e0be468b593add1bd7f9bbb2d090308a"
 
       - name: Set up keychain
         script: keychain initialize
