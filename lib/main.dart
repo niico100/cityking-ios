@@ -33,11 +33,15 @@ class SavedListing {
     required this.title,
     required this.url,
     required this.savedAt,
+    this.imageUrl,
+    this.startsAt,
   });
 
   final String title;
   final String url;
   final DateTime savedAt;
+  final String? imageUrl;
+  final DateTime? startsAt;
 
   String get id => Uri.parse(url).removeFragment().toString();
 
@@ -45,6 +49,8 @@ class SavedListing {
     'title': title,
     'url': url,
     'savedAt': savedAt.toIso8601String(),
+    if (imageUrl != null && imageUrl!.isNotEmpty) 'imageUrl': imageUrl!,
+    if (startsAt != null) 'startsAt': startsAt!.toIso8601String(),
   };
 
   static SavedListing? fromJson(Object? raw) {
@@ -54,11 +60,27 @@ class SavedListing {
     final title = raw['title']?.toString().trim() ?? '';
     final url = raw['url']?.toString().trim() ?? '';
     final savedAt = DateTime.tryParse(raw['savedAt']?.toString() ?? '');
+    final imageUrl = raw['imageUrl']?.toString().trim();
+    final startsAt = DateTime.tryParse(raw['startsAt']?.toString() ?? '');
     if (title.isEmpty || url.isEmpty || savedAt == null) {
       return null;
     }
-    return SavedListing(title: title, url: url, savedAt: savedAt);
+    return SavedListing(
+      title: title,
+      url: url,
+      savedAt: savedAt,
+      imageUrl: imageUrl == null || imageUrl.isEmpty ? null : imageUrl,
+      startsAt: startsAt,
+    );
   }
+}
+
+class _ListingMetadata {
+  const _ListingMetadata({this.title, this.imageUrl, this.startsAt});
+
+  final String? title;
+  final String? imageUrl;
+  final DateTime? startsAt;
 }
 
 class CityKingApp extends StatelessWidget {
@@ -216,11 +238,16 @@ class _CityKingHomeState extends State<CityKingHome> {
       return;
     }
     final title = (await _controller.getTitle())?.trim();
+    final metadata = await _readCurrentListingMetadata();
     final fallbackTitle = _selectedCity.name;
     final listing = SavedListing(
-      title: (title == null || title.isEmpty) ? fallbackTitle : title,
+      title:
+          metadata.title ??
+          ((title == null || title.isEmpty) ? fallbackTitle : title),
       url: uri.toString(),
       savedAt: DateTime.now(),
+      imageUrl: metadata.imageUrl,
+      startsAt: metadata.startsAt,
     );
     setState(() {
       _savedListings = [
@@ -233,6 +260,39 @@ class _CityKingHomeState extends State<CityKingHome> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Saved')));
+    }
+  }
+
+  Future<_ListingMetadata> _readCurrentListingMetadata() async {
+    try {
+      final raw = await _controller.runJavaScriptReturningResult('''
+        JSON.stringify({
+          title: document.querySelector('meta[property="og:title"]')?.content
+            || document.querySelector('h1')?.textContent
+            || document.title
+            || null,
+          imageUrl: document.querySelector('meta[property="og:image"]')?.content
+            || document.querySelector('article img')?.src
+            || document.querySelector('img')?.src
+            || null,
+          startsAt: document.querySelector('time[datetime]')?.getAttribute('datetime')
+            || document.querySelector('[data-starts-at]')?.getAttribute('data-starts-at')
+            || null
+        })
+      ''');
+      final payload = raw is String ? jsonDecode(raw) : raw;
+      if (payload is! Map) {
+        return const _ListingMetadata();
+      }
+      final title = payload['title']?.toString().trim();
+      final imageUrl = payload['imageUrl']?.toString().trim();
+      return _ListingMetadata(
+        title: title == null || title.isEmpty ? null : title,
+        imageUrl: imageUrl == null || imageUrl.isEmpty ? null : imageUrl,
+        startsAt: DateTime.tryParse(payload['startsAt']?.toString() ?? ''),
+      );
+    } catch (_) {
+      return const _ListingMetadata();
     }
   }
 
@@ -263,9 +323,19 @@ class _CityKingHomeState extends State<CityKingHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 12,
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
         title: Row(
           children: [
+            IconButton(
+              tooltip: 'Back',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () async {
+                if (await _controller.canGoBack()) {
+                  await _controller.goBack();
+                }
+              },
+            ),
             const Text(
               'CityKing',
               style: TextStyle(fontWeight: FontWeight.w800),
@@ -294,15 +364,6 @@ class _CityKingHomeState extends State<CityKingHome> {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Back',
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () async {
-              if (await _controller.canGoBack()) {
-                await _controller.goBack();
-              }
-            },
-          ),
           IconButton(
             tooltip: _isCurrentPageSaved ? 'Saved' : 'Save',
             icon: Icon(
@@ -367,7 +428,7 @@ class _CityKingHomeState extends State<CityKingHome> {
   }
 }
 
-class SavedListingsView extends StatelessWidget {
+class SavedListingsView extends StatefulWidget {
   const SavedListingsView({
     required this.listings,
     required this.onOpen,
@@ -380,8 +441,15 @@ class SavedListingsView extends StatelessWidget {
   final ValueChanged<SavedListing> onRemove;
 
   @override
+  State<SavedListingsView> createState() => _SavedListingsViewState();
+}
+
+class _SavedListingsViewState extends State<SavedListingsView> {
+  var _showPast = false;
+
+  @override
   Widget build(BuildContext context) {
-    if (listings.isEmpty) {
+    if (widget.listings.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(28),
@@ -404,49 +472,143 @@ class SavedListingsView extends StatelessWidget {
         ),
       );
     }
+    final now = DateTime.now();
+    final futureListings = widget.listings
+        .where(
+          (listing) =>
+              listing.startsAt == null || !listing.startsAt!.isBefore(now),
+        )
+        .toList();
+    final pastListings = widget.listings
+        .where(
+          (listing) =>
+              listing.startsAt != null && listing.startsAt!.isBefore(now),
+        )
+        .toList();
+    final visibleListings = _showPast ? pastListings : futureListings;
+
     return SafeArea(
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
-        itemBuilder: (context, index) {
-          final listing = listings[index];
-          return Dismissible(
-            key: ValueKey(listing.id),
-            direction: DismissDirection.endToStart,
-            background: Container(
-              alignment: Alignment.centerRight,
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              decoration: BoxDecoration(
-                color: const Color(0xFFDC2626),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.delete, color: Colors.white),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+            child: SegmentedButton<bool>(
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: const Text('Future Events'),
+                  icon: const Icon(Icons.event_available),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: const Text('Past Events'),
+                  icon: const Icon(Icons.history),
+                ),
+              ],
+              selected: {_showPast},
+              onSelectionChanged: (selection) {
+                setState(() => _showPast = selection.first);
+              },
+              showSelectedIcon: false,
             ),
-            onDismissed: (_) => onRemove(listing),
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-              leading: const CircleAvatar(child: Icon(Icons.bookmark)),
-              title: Text(
-                listing.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              subtitle: Text(
-                Uri.parse(listing.url).path,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: IconButton(
-                tooltip: 'Remove',
-                icon: const Icon(Icons.close),
-                onPressed: () => onRemove(listing),
-              ),
-              onTap: () => onOpen(listing),
-            ),
-          );
+          ),
+          Expanded(
+            child: visibleListings.isEmpty
+                ? Center(
+                    child: Text(
+                      _showPast
+                          ? 'No past saved events'
+                          : 'No future saved events',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+                    itemBuilder: (context, index) {
+                      final listing = visibleListings[index];
+                      return Dismissible(
+                        key: ValueKey(listing.id),
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDC2626),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+                        onDismissed: (_) => widget.onRemove(listing),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                          ),
+                          leading: _SavedListingImage(
+                            imageUrl: listing.imageUrl,
+                          ),
+                          title: Text(
+                            listing.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(
+                            _savedListingSubtitle(listing),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Remove',
+                            icon: const Icon(Icons.close),
+                            onPressed: () => widget.onRemove(listing),
+                          ),
+                          onTap: () => widget.onOpen(listing),
+                        ),
+                      );
+                    },
+                    separatorBuilder: (context, index) =>
+                        const Divider(height: 1),
+                    itemCount: visibleListings.length,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _savedListingSubtitle(SavedListing listing) {
+    final path = Uri.parse(listing.url).path;
+    final startsAt = listing.startsAt;
+    if (startsAt == null) {
+      return path;
+    }
+    final date =
+        '${startsAt.day.toString().padLeft(2, '0')}/${startsAt.month.toString().padLeft(2, '0')}/${startsAt.year}';
+    return '$date · $path';
+  }
+}
+
+class _SavedListingImage extends StatelessWidget {
+  const _SavedListingImage({required this.imageUrl});
+
+  final String? imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = imageUrl;
+    if (url == null || url.isEmpty) {
+      return const CircleAvatar(child: Icon(Icons.bookmark));
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Image.network(
+        url,
+        width: 56,
+        height: 56,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return const CircleAvatar(child: Icon(Icons.bookmark));
         },
-        separatorBuilder: (context, index) => const Divider(height: 1),
-        itemCount: listings.length,
       ),
     );
   }
