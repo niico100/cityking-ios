@@ -14,6 +14,9 @@ const _siteOrigin = 'https://cityking.com';
 const _sourceParam = 'source=ios';
 const _savedListingsKey = 'saved_listings_v1';
 const _selectedCityKey = 'selected_city_v1';
+const _plannedListingIdsKey = 'planned_listing_ids_v1';
+const _completedListingIdsKey = 'completed_listing_ids_v1';
+const _tripNotesKey = 'trip_notes_v1';
 
 const _cities = <CityOption>[
   CityOption('Prague', '/prague'),
@@ -117,6 +120,9 @@ class _CityKingHomeState extends State<CityKingHome> {
   var _selectedCity = _cities.first;
   Uri? _currentUri;
   List<SavedListing> _savedListings = const [];
+  Set<String> _plannedListingIds = const {};
+  Set<String> _completedListingIds = const {};
+  var _tripNotes = '';
 
   @override
   void initState() {
@@ -156,12 +162,24 @@ class _CityKingHomeState extends State<CityKingHome> {
       orElse: () => _cities.first,
     );
     final saved = _decodeSavedListings(prefs.getStringList(_savedListingsKey));
+    final savedIds = saved.map((listing) => listing.id).toSet();
+    final plannedIds =
+        (prefs.getStringList(_plannedListingIdsKey) ?? const <String>[])
+            .where(savedIds.contains)
+            .toSet();
+    final completedIds =
+        (prefs.getStringList(_completedListingIdsKey) ?? const <String>[])
+            .where(savedIds.contains)
+            .toSet();
     if (!mounted) {
       return;
     }
     setState(() {
       _selectedCity = city;
       _savedListings = saved;
+      _plannedListingIds = plannedIds;
+      _completedListingIds = completedIds;
+      _tripNotes = prefs.getString(_tripNotesKey) ?? '';
     });
     await _loadCity(city);
   }
@@ -188,6 +206,19 @@ class _CityKingHomeState extends State<CityKingHome> {
       _savedListingsKey,
       _savedListings.map((listing) => jsonEncode(listing.toJson())).toList(),
     );
+  }
+
+  Future<void> _persistPlannerState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _plannedListingIdsKey,
+      _plannedListingIds.toList(),
+    );
+    await prefs.setStringList(
+      _completedListingIdsKey,
+      _completedListingIds.toList(),
+    );
+    await prefs.setString(_tripNotesKey, _tripNotes);
   }
 
   Future<void> _loadCity(CityOption city) async {
@@ -254,8 +285,10 @@ class _CityKingHomeState extends State<CityKingHome> {
         listing,
         ..._savedListings.where((item) => item.id != listing.id),
       ];
+      _plannedListingIds = {..._plannedListingIds, listing.id};
     });
     await _persistSavedListings();
+    await _persistPlannerState();
     if (mounted) {
       ScaffoldMessenger.of(
         context,
@@ -302,13 +335,55 @@ class _CityKingHomeState extends State<CityKingHome> {
         for (final item in _savedListings)
           if (item.id != listing.id) item,
       ];
+      _plannedListingIds = {..._plannedListingIds}..remove(listing.id);
+      _completedListingIds = {..._completedListingIds}..remove(listing.id);
     });
     await _persistSavedListings();
+    await _persistPlannerState();
   }
 
   Future<void> _openSavedListing(SavedListing listing) async {
     setState(() => _currentIndex = 0);
     await _controller.loadRequest(Uri.parse(listing.url));
+  }
+
+  Future<void> _togglePlannedListing(SavedListing listing, bool planned) async {
+    setState(() {
+      final plannedIds = {..._plannedListingIds};
+      final completedIds = {..._completedListingIds};
+      if (planned) {
+        plannedIds.add(listing.id);
+      } else {
+        plannedIds.remove(listing.id);
+        completedIds.remove(listing.id);
+      }
+      _plannedListingIds = plannedIds;
+      _completedListingIds = completedIds;
+    });
+    await _persistPlannerState();
+  }
+
+  Future<void> _toggleCompletedListing(
+    SavedListing listing,
+    bool completed,
+  ) async {
+    setState(() {
+      final plannedIds = {..._plannedListingIds, listing.id};
+      final completedIds = {..._completedListingIds};
+      if (completed) {
+        completedIds.add(listing.id);
+      } else {
+        completedIds.remove(listing.id);
+      }
+      _plannedListingIds = plannedIds;
+      _completedListingIds = completedIds;
+    });
+    await _persistPlannerState();
+  }
+
+  Future<void> _updateTripNotes(String notes) async {
+    setState(() => _tripNotes = notes);
+    await _persistPlannerState();
   }
 
   bool get _isCurrentPageSaved {
@@ -405,6 +480,18 @@ class _CityKingHomeState extends State<CityKingHome> {
             listings: _savedListings,
             onOpen: _openSavedListing,
             onRemove: _removeSavedListing,
+            plannedListingIds: _plannedListingIds,
+            onPlanChanged: _togglePlannedListing,
+          ),
+          PlannerView(
+            listings: _savedListings,
+            plannedListingIds: _plannedListingIds,
+            completedListingIds: _completedListingIds,
+            tripNotes: _tripNotes,
+            onOpen: _openSavedListing,
+            onPlannedChanged: _togglePlannedListing,
+            onCompletedChanged: _toggleCompletedListing,
+            onNotesChanged: _updateTripNotes,
           ),
         ],
       ),
@@ -422,6 +509,11 @@ class _CityKingHomeState extends State<CityKingHome> {
             selectedIcon: const Icon(Icons.bookmarks),
             label: 'Saved (${_savedListings.length})',
           ),
+          NavigationDestination(
+            icon: const Icon(Icons.checklist_outlined),
+            selectedIcon: const Icon(Icons.checklist),
+            label: 'Plan',
+          ),
         ],
       ),
     );
@@ -433,12 +525,16 @@ class SavedListingsView extends StatefulWidget {
     required this.listings,
     required this.onOpen,
     required this.onRemove,
+    required this.plannedListingIds,
+    required this.onPlanChanged,
     super.key,
   });
 
   final List<SavedListing> listings;
   final ValueChanged<SavedListing> onOpen;
   final ValueChanged<SavedListing> onRemove;
+  final Set<String> plannedListingIds;
+  final void Function(SavedListing listing, bool planned) onPlanChanged;
 
   @override
   State<SavedListingsView> createState() => _SavedListingsViewState();
@@ -558,9 +654,19 @@ class _SavedListingsViewState extends State<SavedListingsView> {
                             overflow: TextOverflow.ellipsis,
                           ),
                           trailing: IconButton(
-                            tooltip: 'Remove',
-                            icon: const Icon(Icons.close),
-                            onPressed: () => widget.onRemove(listing),
+                            tooltip:
+                                widget.plannedListingIds.contains(listing.id)
+                                ? 'Remove from plan'
+                                : 'Add to plan',
+                            icon: Icon(
+                              widget.plannedListingIds.contains(listing.id)
+                                  ? Icons.event_available
+                                  : Icons.event_available_outlined,
+                            ),
+                            onPressed: () => widget.onPlanChanged(
+                              listing,
+                              !widget.plannedListingIds.contains(listing.id),
+                            ),
                           ),
                           onTap: () => widget.onOpen(listing),
                         ),
@@ -585,6 +691,305 @@ class _SavedListingsViewState extends State<SavedListingsView> {
     final date =
         '${startsAt.day.toString().padLeft(2, '0')}/${startsAt.month.toString().padLeft(2, '0')}/${startsAt.year}';
     return '$date · $path';
+  }
+}
+
+class PlannerView extends StatefulWidget {
+  const PlannerView({
+    required this.listings,
+    required this.plannedListingIds,
+    required this.completedListingIds,
+    required this.tripNotes,
+    required this.onOpen,
+    required this.onPlannedChanged,
+    required this.onCompletedChanged,
+    required this.onNotesChanged,
+    super.key,
+  });
+
+  final List<SavedListing> listings;
+  final Set<String> plannedListingIds;
+  final Set<String> completedListingIds;
+  final String tripNotes;
+  final ValueChanged<SavedListing> onOpen;
+  final void Function(SavedListing listing, bool planned) onPlannedChanged;
+  final void Function(SavedListing listing, bool completed) onCompletedChanged;
+  final ValueChanged<String> onNotesChanged;
+
+  @override
+  State<PlannerView> createState() => _PlannerViewState();
+}
+
+class _PlannerViewState extends State<PlannerView> {
+  late final TextEditingController _notesController;
+
+  @override
+  void initState() {
+    super.initState();
+    _notesController = TextEditingController(text: widget.tripNotes);
+  }
+
+  @override
+  void didUpdateWidget(covariant PlannerView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tripNotes != widget.tripNotes &&
+        _notesController.text != widget.tripNotes) {
+      _notesController.text = widget.tripNotes;
+    }
+  }
+
+  @override
+  void dispose() {
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plannedListings = [
+      for (final listing in widget.listings)
+        if (widget.plannedListingIds.contains(listing.id)) listing,
+    ];
+    plannedListings.sort((a, b) {
+      final aTime = a.startsAt;
+      final bTime = b.startsAt;
+      if (aTime == null && bTime == null) {
+        return a.savedAt.compareTo(b.savedAt);
+      }
+      if (aTime == null) {
+        return 1;
+      }
+      if (bTime == null) {
+        return -1;
+      }
+      return aTime.compareTo(bTime);
+    });
+    final unplannedListings = [
+      for (final listing in widget.listings)
+        if (!widget.plannedListingIds.contains(listing.id)) listing,
+    ];
+
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _PlannerStat(
+                  icon: Icons.event_note,
+                  label: 'Planned',
+                  value: plannedListings.length.toString(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _PlannerStat(
+                  icon: Icons.task_alt,
+                  label: 'Done',
+                  value: widget.completedListingIds.length.toString(),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          TextField(
+            controller: _notesController,
+            minLines: 3,
+            maxLines: 6,
+            textInputAction: TextInputAction.newline,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Trip notes',
+              prefixIcon: Icon(Icons.edit_note),
+            ),
+            onChanged: widget.onNotesChanged,
+          ),
+          const SizedBox(height: 22),
+          Text(
+            'Today Plan',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          if (plannedListings.isEmpty)
+            const _PlannerEmptyState()
+          else
+            ...plannedListings.map(
+              (listing) => _PlannerListingTile(
+                listing: listing,
+                planned: true,
+                completed: widget.completedListingIds.contains(listing.id),
+                onOpen: () => widget.onOpen(listing),
+                onPlannedChanged: (planned) =>
+                    widget.onPlannedChanged(listing, planned),
+                onCompletedChanged: (completed) =>
+                    widget.onCompletedChanged(listing, completed),
+              ),
+            ),
+          if (unplannedListings.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Saved Ideas',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            ...unplannedListings.map(
+              (listing) => _PlannerListingTile(
+                listing: listing,
+                planned: false,
+                completed: false,
+                onOpen: () => widget.onOpen(listing),
+                onPlannedChanged: (planned) =>
+                    widget.onPlannedChanged(listing, planned),
+                onCompletedChanged: (completed) =>
+                    widget.onCompletedChanged(listing, completed),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PlannerStat extends StatelessWidget {
+  const _PlannerStat({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: const Color(0xFFE11D48)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlannerEmptyState extends StatelessWidget {
+  const _PlannerEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Column(
+        children: [
+          Icon(Icons.event_available_outlined, size: 42),
+          SizedBox(height: 10),
+          Text(
+            'Add saved listings to build a day plan',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlannerListingTile extends StatelessWidget {
+  const _PlannerListingTile({
+    required this.listing,
+    required this.planned,
+    required this.completed,
+    required this.onOpen,
+    required this.onPlannedChanged,
+    required this.onCompletedChanged,
+  });
+
+  final SavedListing listing;
+  final bool planned;
+  final bool completed;
+  final VoidCallback onOpen;
+  final ValueChanged<bool> onPlannedChanged;
+  final ValueChanged<bool> onCompletedChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        shape: RoundedRectangleBorder(
+          side: const BorderSide(color: Color(0xFFE5E7EB)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        leading: Checkbox(
+          value: completed,
+          onChanged: planned
+              ? (value) => onCompletedChanged(value ?? false)
+              : null,
+        ),
+        title: Text(
+          listing.title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            decoration: completed ? TextDecoration.lineThrough : null,
+          ),
+        ),
+        subtitle: Text(
+          _plannerListingSubtitle(listing),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: IconButton(
+          tooltip: planned ? 'Remove from plan' : 'Add to plan',
+          icon: Icon(planned ? Icons.remove_circle_outline : Icons.add_circle),
+          onPressed: () => onPlannedChanged(!planned),
+        ),
+        onTap: onOpen,
+      ),
+    );
+  }
+
+  String _plannerListingSubtitle(SavedListing listing) {
+    final startsAt = listing.startsAt;
+    if (startsAt == null) {
+      return Uri.parse(listing.url).path;
+    }
+    final date =
+        '${startsAt.day.toString().padLeft(2, '0')}/${startsAt.month.toString().padLeft(2, '0')}/${startsAt.year}';
+    final time =
+        '${startsAt.hour.toString().padLeft(2, '0')}:${startsAt.minute.toString().padLeft(2, '0')}';
+    return '$date $time';
   }
 }
 
