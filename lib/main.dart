@@ -12,6 +12,7 @@ void main() {
 
 const _siteOrigin = 'https://cityking.com';
 const _sourceParam = 'source=ios';
+const _privacyPolicyUrl = 'https://neonshard.com/policies/privacypolicy.txt';
 const _savedListingsKey = 'saved_listings_v1';
 const _selectedCityKey = 'selected_city_v1';
 const _plannedListingIdsKey = 'planned_listing_ids_v1';
@@ -116,6 +117,7 @@ class CityKingHome extends StatefulWidget {
 class _CityKingHomeState extends State<CityKingHome> {
   late final WebViewController _controller;
   var _loading = true;
+  String? _loadError;
   var _currentIndex = 0;
   var _selectedCity = _cities.first;
   Uri? _currentUri;
@@ -133,10 +135,22 @@ class _CityKingHomeState extends State<CityKingHome> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onNavigationRequest: _handleNavigationRequest,
+          onWebResourceError: (error) {
+            if (error.isForMainFrame == false || !mounted) {
+              return;
+            }
+            setState(() {
+              _loading = false;
+              _loadError = error.description.isEmpty
+                  ? 'The city guide could not be loaded.'
+                  : error.description;
+            });
+          },
           onPageFinished: (url) {
             if (mounted) {
               setState(() {
                 _loading = false;
+                _loadError = null;
                 _currentUri = Uri.tryParse(url);
               });
             }
@@ -145,6 +159,7 @@ class _CityKingHomeState extends State<CityKingHome> {
             if (mounted) {
               setState(() {
                 _loading = true;
+                _loadError = null;
                 _currentUri = Uri.tryParse(url);
               });
             }
@@ -228,6 +243,20 @@ class _CityKingHomeState extends State<CityKingHome> {
     await _controller.loadRequest(
       Uri.parse('$_siteOrigin${city.path}$separator$_sourceParam'),
     );
+  }
+
+  Future<void> _reloadCurrentPage() async {
+    setState(() {
+      _loading = true;
+      _loadError = null;
+    });
+    final url = await _controller.currentUrl();
+    final uri = Uri.tryParse(url ?? '');
+    if (uri != null && _shouldStayInApp(uri)) {
+      await _controller.reload();
+      return;
+    }
+    await _loadCity(_selectedCity);
   }
 
   Future<NavigationDecision> _handleNavigationRequest(
@@ -386,6 +415,53 @@ class _CityKingHomeState extends State<CityKingHome> {
     await _persistPlannerState();
   }
 
+  Future<void> _showAboutSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Prague Today',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Browse current city listings, save events and places on this device, and build a native day plan with checklist status and trip notes.',
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('Privacy policy'),
+                  subtitle: const Text(_privacyPolicyUrl),
+                  onTap: () => _openExternal(Uri.parse(_privacyPolicyUrl)),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.support_agent_outlined),
+                  title: const Text('Support'),
+                  subtitle: const Text(
+                    'Use the privacy link for support and policy information.',
+                  ),
+                  onTap: () => _openExternal(Uri.parse(_privacyPolicyUrl)),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   bool get _isCurrentPageSaved {
     final current = _currentUri?.removeFragment().toString();
     if (current == null) {
@@ -412,7 +488,7 @@ class _CityKingHomeState extends State<CityKingHome> {
               },
             ),
             const Text(
-              'CityKing',
+              'Prague Today',
               style: TextStyle(fontWeight: FontWeight.w800),
             ),
             const SizedBox(width: 12),
@@ -457,6 +533,11 @@ class _CityKingHomeState extends State<CityKingHome> {
               }
             },
           ),
+          IconButton(
+            tooltip: 'About and privacy',
+            icon: const Icon(Icons.info_outline),
+            onPressed: _showAboutSheet,
+          ),
         ],
       ),
       body: IndexedStack(
@@ -473,6 +554,13 @@ class _CityKingHomeState extends State<CityKingHome> {
                     backgroundColor: Color(0xFFE5E7EB),
                     color: Color(0xFFE11D48),
                   ),
+                if (_loadError != null)
+                  _LoadErrorView(
+                    message: _loadError!,
+                    onRetry: _reloadCurrentPage,
+                  ),
+                if (!_loading && _loadError == null && _savedListings.isEmpty)
+                  _NativePlanHint(onSave: _saveCurrentPage),
               ],
             ),
           ),
@@ -515,6 +603,98 @@ class _CityKingHomeState extends State<CityKingHome> {
             label: 'Plan',
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LoadErrorView extends StatelessWidget {
+  const _LoadErrorView({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Colors.white,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.wifi_off_outlined, size: 46),
+                const SizedBox(height: 14),
+                const Text(
+                  'City guide unavailable',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NativePlanHint extends StatelessWidget {
+  const _NativePlanHint({required this.onSave});
+
+  final VoidCallback onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 14,
+      right: 14,
+      bottom: 14,
+      child: Material(
+        elevation: 8,
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          child: Row(
+            children: [
+              const Icon(Icons.bookmark_add_outlined, color: Color(0xFFE11D48)),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Save a listing to build a native day plan.',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton(
+                onPressed: onSave,
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

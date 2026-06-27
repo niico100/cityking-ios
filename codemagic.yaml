@@ -44,9 +44,11 @@ workflows:
 
       - name: Build signed IPA
         script: |
+          BUILD_NUM="${BUILD_NUMBER:-11}"
+          if [ "$BUILD_NUM" -lt 11 ]; then BUILD_NUM=11; fi
           flutter build ipa --release \
             --build-name=1.0.0 \
-            --build-number="${BUILD_NUMBER:-1}" \
+            --build-number="$BUILD_NUM" \
             --export-options-plist=/Users/builder/export_options.plist
 
     artifacts:
@@ -98,9 +100,11 @@ workflows:
 
       - name: Build signed IPA
         script: |
+          BUILD_NUM="${BUILD_NUMBER:-11}"
+          if [ "$BUILD_NUM" -lt 11 ]; then BUILD_NUM=11; fi
           flutter build ipa --release \
             --build-name=1.0.0 \
-            --build-number="${BUILD_NUMBER:-1}" \
+            --build-number="$BUILD_NUM" \
             --export-options-plist=/Users/builder/export_options.plist
 
     artifacts:
