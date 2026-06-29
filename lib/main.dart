@@ -556,9 +556,25 @@ class _CityKingHomeState extends State<CityKingHome> {
                 }
               },
             ),
-            const Text(
-              'Prague Today',
-              style: TextStyle(fontWeight: FontWeight.w800),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    'https://cityking.com/static/app/icon-192.png',
+                    width: 28,
+                    height: 28,
+                    errorBuilder: (context, error, stackTrace) =>
+                        const Icon(Icons.location_on_outlined, size: 28),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'CityKing',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ],
             ),
             const SizedBox(width: 12),
             DropdownButtonHideUnderline(
