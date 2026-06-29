@@ -266,6 +266,10 @@ class _CityKingHomeState extends State<CityKingHome> {
     if (uri == null) {
       return NavigationDecision.prevent;
     }
+    if (_isMapsLink(uri)) {
+      await _showMapOptions(uri);
+      return NavigationDecision.prevent;
+    }
     if (_shouldStayInApp(uri)) {
       return NavigationDecision.navigate;
     }
@@ -279,6 +283,71 @@ class _CityKingHomeState extends State<CityKingHome> {
     }
     final host = uri.host.toLowerCase();
     return host == 'cityking.com' || host.endsWith('.cityking.com');
+  }
+
+  bool _isMapsLink(Uri uri) {
+    final host = uri.host.toLowerCase();
+    return host == 'www.google.com' && uri.path.startsWith('/maps') ||
+        host == 'google.com' && uri.path.startsWith('/maps') ||
+        host == 'maps.google.com' ||
+        host == 'maps.app.goo.gl' ||
+        host == 'maps.apple.com';
+  }
+
+  Uri _appleMapsUri(Uri source) {
+    if (source.host.toLowerCase() == 'maps.apple.com') {
+      return source;
+    }
+    final query =
+        source.queryParameters['query'] ??
+        source.queryParameters['q'] ??
+        source.queryParameters['destination'] ??
+        source.queryParameters['daddr'] ??
+        source.queryParameters['ll'] ??
+        source.toString();
+    return Uri.https('maps.apple.com', '/', {'q': query});
+  }
+
+  Future<void> _showMapOptions(Uri uri) async {
+    final appleMapsUri = _appleMapsUri(uri);
+    if (!mounted) {
+      await _openExternal(appleMapsUri);
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.map_outlined),
+                  title: const Text('Open in Apple Maps'),
+                  subtitle: const Text('Use the native iOS Maps app'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _openExternal(appleMapsUri);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.public),
+                  title: const Text('Open original map link'),
+                  subtitle: Text(uri.host),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _openExternal(uri);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openExternal(Uri uri) async {
